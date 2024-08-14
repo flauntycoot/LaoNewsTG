@@ -10,6 +10,7 @@ import logging
 import re
 import os
 import threading
+from urllib.parse import urljoin
 
 # Telegram bot configuration
 telegram_bot_token = '7241698952:AAF_-xoUSOVmJHSaJE_9d1--OUBqzZKTo6o'
@@ -30,7 +31,7 @@ urls = {}
 # Dictionary to store chat IDs
 chat_ids = {}
 
-# Function to load URLs from the file
+# Load URLs from the file
 def load_urls():
     global urls
     if os.path.exists(url_file_path):
@@ -39,12 +40,12 @@ def load_urls():
     else:
         urls.update({})
 
-# Function to save URLs to the file
+# Save URLs to the file
 def save_urls():
     with open(url_file_path, 'w') as file:
-        json.dump(urls, file)
+        json.dump(urls, file, indent=4)
 
-# Function to send Telegram message
+# Send Telegram message
 def send_telegram_message(chat_id, message):
     url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
     payload = {
@@ -59,7 +60,7 @@ def send_telegram_message(chat_id, message):
     except requests.RequestException as e:
         logger.error(f"Не удалось отправить сообщение: {e}")
 
-# Function to parse RSS feed
+# Parse RSS feed
 def parse_rss_feed(url):
     try:
         feed = feedparser.parse(url)
@@ -70,7 +71,7 @@ def parse_rss_feed(url):
         logger.error(f"Не удалось разобрать RSS-ленту с {url}: {e}")
         return None
 
-# Function to get links and spans from the main content on the website
+# Get links and spans from the main content on the website
 def get_links_and_spans_from_content(url):
     try:
         response = requests.get(url)
@@ -78,18 +79,16 @@ def get_links_and_spans_from_content(url):
         soup = BeautifulSoup(response.text, 'html.parser')
         articles = []
         for a in soup.find_all('a', href=True):
-            link = a['href']
-            if re.match(r'^https?://', link):
+            link = urljoin(url, a['href'])  # Ensure URLs are absolute
+            if re.match(r'^https?://', link) and ('/news/' in link or '/articles/' in link):  # Filter article links
                 articles.append((a.get_text(strip=True), link))
-        for span in soup.find_all('span'):
-            articles.append((span.get_text(strip=True), url))
-        logger.debug(f"Extracted {len(articles)} links and spans from {url}")
+        logger.debug(f"Extracted {len(articles)} links from {url}")
         return articles
     except requests.RequestException as e:
         logger.error(f"Не удалось получить содержимое с {url}: {e}")
         return None
 
-# Function to generate the inline keyboard
+# Generate the inline keyboard
 def generate_keyboard():
     keyboard = [
         [
@@ -103,14 +102,14 @@ def generate_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# Function to handle the start command and show inline buttons
+# Handle the start command and show inline buttons
 async def start(update: Update, context):
     reply_markup = generate_keyboard()
     await update.message.reply_text('Пожалуйста, выберите:', reply_markup=reply_markup)
     chat_ids[update.message.chat_id] = update.message.chat_id
     logger.info(f"Chat ID {update.message.chat_id} added.")
 
-# Function to handle button presses
+# Handle button presses
 async def button(update: Update, context):
     query = update.callback_query
     await query.answer()
@@ -129,7 +128,7 @@ async def button(update: Update, context):
         await clear_urls(query, context)
         context.user_data['action'] = None
 
-# Function to validate URL format
+# Validate URL format
 def is_valid_url(url):
     regex = re.compile(
         r'^(?:http|ftp)s?://' # http:// or https://
@@ -141,7 +140,7 @@ def is_valid_url(url):
         r'(?:/?|[/?]\S+)$', re.IGNORECASE)
     return re.match(regex, url) is not None
 
-# Function to add URL with keywords
+# Add URL with keywords
 async def add_url(update: Update, context):
     url_and_keywords = update.message.text.split('|')
     if len(url_and_keywords) == 2:
@@ -161,7 +160,7 @@ async def add_url(update: Update, context):
     else:
         await update.message.reply_text("Пожалуйста, укажите URL и ключевые слова, разделенные символом '|'", reply_markup=generate_keyboard())
 
-# Function to remove URL
+# Remove URL
 async def remove_url(update: Update, context):
     try:
         index = int(update.message.text) - 1
@@ -176,7 +175,7 @@ async def remove_url(update: Update, context):
     except ValueError:
         await update.message.reply_text("Пожалуйста, укажите правильный номер.", reply_markup=generate_keyboard())
 
-# Function to list URLs
+# List URLs
 async def list_urls(update: Update, context):
     if urls:
         url_list = "\n".join([f"{i+1}. {url} (Ключевые слова: {', '.join(data['keywords'])})" for i, (url, data) in enumerate(urls.items())])
@@ -184,14 +183,14 @@ async def list_urls(update: Update, context):
     else:
         await update.message.reply_text("Нет отслеживаемых URL.", reply_markup=generate_keyboard())
 
-# Function to clear URLs
+# Clear URLs
 async def clear_urls(update: Update, context):
     urls.clear()
     save_urls()  # Save after clearing URLs
     await update.message.reply_text("Все URL были очищены.", reply_markup=generate_keyboard())
     logger.info("Все URL были очищены.")
 
-# Function to add keyword
+# Add keyword
 async def add_keyword(update: Update, context):
     try:
         index, keyword = update.message.text.split(' ', 1)
@@ -207,7 +206,7 @@ async def add_keyword(update: Update, context):
     except ValueError:
         await update.message.reply_text("Пожалуйста, укажите правильный индекс и ключевое слово.", reply_markup=generate_keyboard())
 
-# Function to remove keyword
+# Remove keyword
 async def remove_keyword(update: Update, context):
     try:
         index, keyword = update.message.text.split(' ', 1)
@@ -227,7 +226,7 @@ async def remove_keyword(update: Update, context):
     except ValueError:
         await update.message.reply_text("Пожалуйста, укажите правильный индекс и ключевое слово.", reply_markup=generate_keyboard())
 
-# Function to list keywords
+# List keywords
 async def list_keywords(update: Update, context):
     try:
         index = int(update.message.text) - 1
@@ -243,7 +242,7 @@ async def list_keywords(update: Update, context):
     except ValueError:
         await update.message.reply_text("Пожалуйста, укажите правильный индекс.", reply_markup=generate_keyboard())
 
-# Function to handle user messages based on the context of the action (add/remove/keywords)
+# Handle user messages based on the context of the action (add/remove/keywords)
 async def handle_message(update: Update, context):
     action = context.user_data.get('action')
     chat_ids[update.message.chat_id] = update.message.chat_id
@@ -266,6 +265,7 @@ async def handle_message(update: Update, context):
 # Initialize previous articles for all URLs
 previous_articles = {}
 
+# Monitoring function
 def start_monitoring():
     logger.info("Мониторинг начался")
     time.sleep(10)
@@ -320,6 +320,7 @@ def start_monitoring():
             logger.error(f"Ошибка во время мониторинга: {e}")
             time.sleep(30)
 
+# Main function
 def main():
     # Load URLs from the file at startup
     load_urls()
