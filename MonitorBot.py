@@ -23,7 +23,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Path to the URL storage file
-url_file_path = os.path.expanduser("~root/LaoNewsTG/urls.json")
+url_file_path = os.path.expanduser("~/LaoNewsTG/urls.json")
 
 # List of URLs to monitor
 urls = {}
