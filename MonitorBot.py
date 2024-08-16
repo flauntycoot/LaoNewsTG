@@ -14,6 +14,7 @@ from urllib.parse import urljoin
 
 # Telegram bot configuration
 telegram_bot_token = '7241698952:AAF_-xoUSOVmJHSaJE_9d1--OUBqzZKTo6o'
+target_chat_id = '-1002244669392'  # Hardcoded chat ID
 
 # Configure logging
 logging.basicConfig(
@@ -27,9 +28,6 @@ url_file_path = os.path.expanduser("~/LaoNewsTG/urls.json")
 
 # List of URLs to monitor
 urls = {}
-
-# Dictionary to store chat IDs
-chat_ids = {}
 
 # Load URLs from the file
 def load_urls():
@@ -46,10 +44,10 @@ def save_urls():
         json.dump(urls, file, indent=4)
 
 # Send Telegram message
-def send_telegram_message(chat_id, message):
+def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
     payload = {
-        'chat_id': chat_id,
+        'chat_id': target_chat_id,  # Use the hardcoded chat ID
         'text': message,
         'parse_mode': 'HTML'
     }
@@ -106,7 +104,6 @@ def generate_keyboard():
 async def start(update: Update, context):
     reply_markup = generate_keyboard()
     await update.message.reply_text('Пожалуйста, выберите:', reply_markup=reply_markup)
-    chat_ids[update.message.chat_id] = update.message.chat_id
     logger.info(f"Chat ID {update.message.chat_id} added.")
 
 # Handle button presses
@@ -245,7 +242,6 @@ async def list_keywords(update: Update, context):
 # Handle user messages based on the context of the action (add/remove/keywords)
 async def handle_message(update: Update, context):
     action = context.user_data.get('action')
-    chat_ids[update.message.chat_id] = update.message.chat_id
     if action == 'add':
         await add_url(update, context)
     elif action == 'remove':
@@ -305,10 +301,8 @@ def start_monitoring():
                             with open('change_log.txt', 'a') as log_file:
                                 log_file.write(message + '\n')
                             
-                            # Send Telegram notification to all users
-                            for chat_id in chat_ids.values():
-                                logger.info(f"Sending notification to {chat_id}")
-                                send_telegram_message(chat_id, message)
+                            # Send Telegram notification to the specific chat
+                            send_telegram_message(message)
                     
                     previous_articles[url] = new_articles
                     logger.info(f"Updated articles for {url}")
