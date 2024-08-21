@@ -10,26 +10,23 @@ import logging
 import re
 import os
 import threading
-from urllib.parse import urljoin
 
 # Telegram bot configuration
 telegram_bot_token = '7241698952:AAF_-xoUSOVmJHSaJE_9d1--OUBqzZKTo6o'
-target_chat_id = '-1002244669392'  # Hardcoded chat ID
-
 # Configure logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
 # Path to the URL storage file
-url_file_path = os.path.expanduser("~/LaoNewsTG/urls.json")
-
+url_file_path = os.path.expanduser("~root/LaoNewsTG/urls.json")
 # List of URLs to monitor
 urls = {}
+# Dictionary to store chat IDs
+chat_ids = {}
 
-# Load URLs from the file
+# Function to load URLs from the file
 def load_urls():
     global urls
     if os.path.exists(url_file_path):
@@ -38,16 +35,16 @@ def load_urls():
     else:
         urls.update({})
 
-# Save URLs to the file
+# Function to save URLs to the file
 def save_urls():
     with open(url_file_path, 'w') as file:
-        json.dump(urls, file, indent=4)
+        json.dump(urls, file)
 
-# Send Telegram message
-def send_telegram_message(message):
+# Function to send Telegram message
+def send_telegram_message(chat_id, message):
     url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
     payload = {
-        'chat_id': target_chat_id,  # Use the hardcoded chat ID
+        'chat_id': chat_id,
         'text': message,
         'parse_mode': 'HTML'
     }
@@ -58,7 +55,7 @@ def send_telegram_message(message):
     except requests.RequestException as e:
         logger.error(f"Не удалось отправить сообщение: {e}")
 
-# Parse RSS feed
+# Function to parse RSS feed
 def parse_rss_feed(url):
     try:
         feed = feedparser.parse(url)
@@ -69,7 +66,7 @@ def parse_rss_feed(url):
         logger.error(f"Не удалось разобрать RSS-ленту с {url}: {e}")
         return None
 
-# Get links and spans from the main content on the website
+# Function to get links and spans from the main content on the website
 def get_links_and_spans_from_content(url):
     try:
         response = requests.get(url)
@@ -77,16 +74,18 @@ def get_links_and_spans_from_content(url):
         soup = BeautifulSoup(response.text, 'html.parser')
         articles = []
         for a in soup.find_all('a', href=True):
-            link = urljoin(url, a['href'])  # Ensure URLs are absolute
-            if re.match(r'^https?://', link) and ('/news/' in link or '/articles/' in link):  # Filter article links
+            link = a['href']
+            if re.match(r'^https?://', link):
                 articles.append((a.get_text(strip=True), link))
-        logger.debug(f"Extracted {len(articles)} links from {url}")
+        for span in soup.find_all('span'):
+            articles.append((span.get_text(strip=True), url))
+        logger.debug(f"Extracted {len(articles)} links and spans from {url}")
         return articles
     except requests.RequestException as e:
         logger.error(f"Не удалось получить содержимое с {url}: {e}")
         return None
 
-# Generate the inline keyboard
+# Function to generate the inline keyboard
 def generate_keyboard():
     keyboard = [
         [
@@ -100,17 +99,17 @@ def generate_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# Handle the start command and show inline buttons
+# Function to handle the start command and show inline buttons
 async def start(update: Update, context):
     reply_markup = generate_keyboard()
     await update.message.reply_text('Пожалуйста, выберите:', reply_markup=reply_markup)
+    chat_ids[update.message.chat_id] = update.message.chat_id
     logger.info(f"Chat ID {update.message.chat_id} added.")
 
-# Handle button presses
+# Function to handle button presses
 async def button(update: Update, context):
     query = update.callback_query
     await query.answer()
-
     if query.data == 'add':
         await query.edit_message_text(text="Отправьте URL для добавления:", reply_markup=generate_keyboard())
         context.user_data['action'] = 'add'
@@ -125,7 +124,7 @@ async def button(update: Update, context):
         await clear_urls(query, context)
         context.user_data['action'] = None
 
-# Validate URL format
+# Function to validate URL format
 def is_valid_url(url):
     regex = re.compile(
         r'^(?:http|ftp)s?://' # http:// or https://
@@ -137,7 +136,7 @@ def is_valid_url(url):
         r'(?:/?|[/?]\S+)$', re.IGNORECASE)
     return re.match(regex, url) is not None
 
-# Add URL with keywords
+# Function to add URL with keywords
 async def add_url(update: Update, context):
     url_and_keywords = update.message.text.split('|')
     if len(url_and_keywords) == 2:
@@ -157,7 +156,7 @@ async def add_url(update: Update, context):
     else:
         await update.message.reply_text("Пожалуйста, укажите URL и ключевые слова, разделенные символом '|'", reply_markup=generate_keyboard())
 
-# Remove URL
+# Function to remove URL
 async def remove_url(update: Update, context):
     try:
         index = int(update.message.text) - 1
@@ -172,7 +171,7 @@ async def remove_url(update: Update, context):
     except ValueError:
         await update.message.reply_text("Пожалуйста, укажите правильный номер.", reply_markup=generate_keyboard())
 
-# List URLs
+# Function to list URLs
 async def list_urls(update: Update, context):
     if urls:
         url_list = "\n".join([f"{i+1}. {url} (Ключевые слова: {', '.join(data['keywords'])})" for i, (url, data) in enumerate(urls.items())])
@@ -180,14 +179,14 @@ async def list_urls(update: Update, context):
     else:
         await update.message.reply_text("Нет отслеживаемых URL.", reply_markup=generate_keyboard())
 
-# Clear URLs
+# Function to clear URLs
 async def clear_urls(update: Update, context):
     urls.clear()
     save_urls()  # Save after clearing URLs
     await update.message.reply_text("Все URL были очищены.", reply_markup=generate_keyboard())
     logger.info("Все URL были очищены.")
 
-# Add keyword
+# Function to add keyword
 async def add_keyword(update: Update, context):
     try:
         index, keyword = update.message.text.split(' ', 1)
@@ -203,7 +202,7 @@ async def add_keyword(update: Update, context):
     except ValueError:
         await update.message.reply_text("Пожалуйста, укажите правильный индекс и ключевое слово.", reply_markup=generate_keyboard())
 
-# Remove keyword
+# Function to remove keyword
 async def remove_keyword(update: Update, context):
     try:
         index, keyword = update.message.text.split(' ', 1)
@@ -223,7 +222,7 @@ async def remove_keyword(update: Update, context):
     except ValueError:
         await update.message.reply_text("Пожалуйста, укажите правильный индекс и ключевое слово.", reply_markup=generate_keyboard())
 
-# List keywords
+# Function to list keywords
 async def list_keywords(update: Update, context):
     try:
         index = int(update.message.text) - 1
@@ -239,9 +238,10 @@ async def list_keywords(update: Update, context):
     except ValueError:
         await update.message.reply_text("Пожалуйста, укажите правильный индекс.", reply_markup=generate_keyboard())
 
-# Handle user messages based on the context of the action (add/remove/keywords)
+# Function to handle user messages based on the context of the action (add/remove/keywords)
 async def handle_message(update: Update, context):
     action = context.user_data.get('action')
+    chat_ids[update.message.chat_id] = update.message.chat_id
     if action == 'add':
         await add_url(update, context)
     elif action == 'remove':
@@ -257,15 +257,12 @@ async def handle_message(update: Update, context):
         await list_keywords(update, context)
     else:
         await update.message.reply_text("Пожалуйста, используйте кнопки для выбора действия.", reply_markup=generate_keyboard())
-
 # Initialize previous articles for all URLs
 previous_articles = {}
 
-# Monitoring function
 def start_monitoring():
     logger.info("Мониторинг начался")
     time.sleep(10)
-
     while True:
         try:
             urls_copy = list(urls.items())  # Make a copy of the dictionary items for iteration
@@ -275,21 +272,16 @@ def start_monitoring():
                     new_articles = parse_rss_feed(url)
                 else:
                     new_articles = get_links_and_spans_from_content(url)
-
                 if new_articles is None:
                     logger.warning(f"Articles for URL {url} are None, skipping")
                     continue
-
                 if url not in previous_articles:
                     previous_articles[url] = new_articles
                     logger.info(f"Initial articles for {url}: {new_articles}")
                     continue
-
                 new_article_titles = {article[0] for article in new_articles}
                 old_article_titles = {article[0] for article in previous_articles[url]}
-
                 new_titles = new_article_titles - old_article_titles
-
                 if new_titles:
                     for title in new_titles:
                         article = next(article for article in new_articles if article[0] == title)
@@ -301,35 +293,30 @@ def start_monitoring():
                             with open('change_log.txt', 'a') as log_file:
                                 log_file.write(message + '\n')
                             
-                            # Send Telegram notification to the specific chat
-                            send_telegram_message(message)
+                            # Send Telegram notification to all users
+                            for chat_id in chat_ids.values():
+                                logger.info(f"Sending notification to {chat_id}")
+                                send_telegram_message(chat_id, message)
                     
                     previous_articles[url] = new_articles
                     logger.info(f"Updated articles for {url}")
                 else:
                     logger.info(f"No new articles detected for {url}")
-
                 time.sleep(30)
         except Exception as e:
             logger.error(f"Ошибка во время мониторинга: {e}")
             time.sleep(30)
 
-# Main function
 def main():
     # Load URLs from the file at startup
     load_urls()
-
     application = Application.builder().token(telegram_bot_token).build()
-
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
     # Start the monitoring in a separate thread
     monitoring_thread = threading.Thread(target=start_monitoring)
     monitoring_thread.start()
-
     application.run_polling()
-
 if __name__ == '__main__':
     main()
