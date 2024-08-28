@@ -3,7 +3,7 @@ import json
 import feedparser
 from datetime import datetime
 import requests
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from bs4 import BeautifulSoup
 import logging
@@ -13,16 +13,21 @@ import threading
 
 # Telegram bot configuration
 telegram_bot_token = '7241698952:AAF_-xoUSOVmJHSaJE_9d1--OUBqzZKTo6o'
+deepl_api_key = 'd5ac1cce-be7b-470f-a54e-2e62afdfdf37:fx'
+
 # Configure logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
 # Path to the URL storage file
 url_file_path = os.path.expanduser("~root/LaoNewsTG/urls.json")
+
 # List of URLs to monitor
 urls = {}
+
 # Dictionary to store chat IDs
 chat_ids = {}
 
@@ -41,12 +46,13 @@ def save_urls():
         json.dump(urls, file)
 
 # Function to send Telegram message
-def send_telegram_message(chat_id, message):
+def send_telegram_message(chat_id, message, reply_markup=None):
     url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
     payload = {
         'chat_id': chat_id,
         'text': message,
-        'parse_mode': 'HTML'
+        'parse_mode': 'HTML',
+        'reply_markup': reply_markup
     }
     try:
         response = requests.post(url, data=payload)
@@ -66,7 +72,7 @@ def parse_rss_feed(url):
         logger.error(f"Не удалось разобрать RSS-ленту с {url}: {e}")
         return None
 
-# Function to get links and spans from the main content on the website
+# Function to get article links from the main content on the website
 def get_links_and_spans_from_content(url):
     try:
         response = requests.get(url)
@@ -77,52 +83,26 @@ def get_links_and_spans_from_content(url):
             link = a['href']
             if re.match(r'^https?://', link):
                 articles.append((a.get_text(strip=True), link))
-        for span in soup.find_all('span'):
-            articles.append((span.get_text(strip=True), url))
-        logger.debug(f"Extracted {len(articles)} links and spans from {url}")
+        logger.debug(f"Extracted {len(articles)} links from {url}")
         return articles
     except requests.RequestException as e:
         logger.error(f"Не удалось получить содержимое с {url}: {e}")
         return None
 
-# Function to generate the inline keyboard
-def generate_keyboard():
+# Функция для создания статического меню (custom keyboard)
+def generate_static_keyboard():
     keyboard = [
-        [
-            InlineKeyboardButton("Добавить URL", callback_data='add'),
-            InlineKeyboardButton("Удалить URL", callback_data='remove'),
-            InlineKeyboardButton("Список URL", callback_data='list')
-        ],
-        [
-            InlineKeyboardButton("Очистить URL", callback_data='clear')
-        ]
+        [KeyboardButton("Добавить URL"), KeyboardButton("Удалить URL")],
+        [KeyboardButton("Список URL"), KeyboardButton("Очистить URL")]
     ]
-    return InlineKeyboardMarkup(keyboard)
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# Function to handle the start command and show inline buttons
+# Function to handle the start command and show static buttons
 async def start(update: Update, context):
-    reply_markup = generate_keyboard()
+    reply_markup = generate_static_keyboard()
     await update.message.reply_text('Пожалуйста, выберите:', reply_markup=reply_markup)
     chat_ids[update.message.chat_id] = update.message.chat_id
     logger.info(f"Chat ID {update.message.chat_id} added.")
-
-# Function to handle button presses
-async def button(update: Update, context):
-    query = update.callback_query
-    await query.answer()
-    if query.data == 'add':
-        await query.edit_message_text(text="Отправьте URL для добавления:", reply_markup=generate_keyboard())
-        context.user_data['action'] = 'add'
-    elif query.data == 'remove':
-        url_list = "\n".join([f"{i+1}. {url}" for i, url in enumerate(urls.keys())])
-        await query.edit_message_text(text=f"Отправьте номер URL для удаления:\n{url_list}", reply_markup=generate_keyboard())
-        context.user_data['action'] = 'remove'
-    elif query.data == 'list':
-        await list_urls(query, context)
-        context.user_data['action'] = None
-    elif query.data == 'clear':
-        await clear_urls(query, context)
-        context.user_data['action'] = None
 
 # Function to validate URL format
 def is_valid_url(url):
@@ -147,14 +127,14 @@ async def add_url(update: Update, context):
             if url not in urls:
                 urls[url] = {"type": "rss" if "rss" in url else "html", "latest": None, "keywords": keywords}
                 save_urls()  # Save URLs after adding a new one
-                await update.message.reply_text(f"Добавлен URL: {url} с ключевыми словами: {', '.join(keywords)}", reply_markup=generate_keyboard())
+                await update.message.reply_text(f"Добавлен URL: {url} с ключевыми словами: {', '.join(keywords)}", reply_markup=generate_static_keyboard())
                 logger.info(f"Добавлен URL: {url} с ключевыми словами: {', '.join(keywords)}")
             else:
-                await update.message.reply_text(f"URL уже в списке: {url}", reply_markup=generate_keyboard())
+                await update.message.reply_text(f"URL уже в списке: {url}", reply_markup=generate_static_keyboard())
         else:
-            await update.message.reply_text("Неверный формат URL. Пожалуйста, укажите правильный URL.", reply_markup=generate_keyboard())
+            await update.message.reply_text("Неверный формат URL. Пожалуйста, укажите правильный URL.", reply_markup=generate_static_keyboard())
     else:
-        await update.message.reply_text("Пожалуйста, укажите URL и ключевые слова, разделенные символом '|'", reply_markup=generate_keyboard())
+        await update.message.reply_text("Пожалуйста, укажите URL и ключевые слова, разделенные символом '|'", reply_markup=generate_static_keyboard())
 
 # Function to remove URL
 async def remove_url(update: Update, context):
@@ -164,99 +144,89 @@ async def remove_url(update: Update, context):
             removed_url = list(urls.keys())[index]
             urls.pop(removed_url)
             save_urls()  # Save URLs after removing one
-            await update.message.reply_text(f"Удален URL: {removed_url}", reply_markup=generate_keyboard())
+            await update.message.reply_text(f"Удален URL: {removed_url}", reply_markup=generate_static_keyboard())
             logger.info(f"Удален URL: {removed_url}")
         else:
-            await update.message.reply_text(f"Недействительный индекс: {index + 1}", reply_markup=generate_keyboard())
+            await update.message.reply_text(f"Недействительный индекс: {index + 1}", reply_markup=generate_static_keyboard())
     except ValueError:
-        await update.message.reply_text("Пожалуйста, укажите правильный номер.", reply_markup=generate_keyboard())
+        await update.message.reply_text("Пожалуйста, укажите правильный номер.", reply_markup=generate_static_keyboard())
 
 # Function to list URLs
 async def list_urls(update: Update, context):
     if urls:
         url_list = "\n".join([f"{i+1}. {url} (Ключевые слова: {', '.join(data['keywords'])})" for i, (url, data) in enumerate(urls.items())])
-        await update.message.reply_text("Отслеживаемые URL:\n" + url_list, reply_markup=generate_keyboard())
+        await update.message.reply_text("Отслеживаемые URL:\n" + url_list, reply_markup=generate_static_keyboard())
     else:
-        await update.message.reply_text("Нет отслеживаемых URL.", reply_markup=generate_keyboard())
+        await update.message.reply_text("Нет отслеживаемых URL.", reply_markup=generate_static_keyboard())
 
 # Function to clear URLs
 async def clear_urls(update: Update, context):
     urls.clear()
     save_urls()  # Save after clearing URLs
-    await update.message.reply_text("Все URL были очищены.", reply_markup=generate_keyboard())
+    await update.message.reply_text("Все URL были очищены.", reply_markup=generate_static_keyboard())
     logger.info("Все URL были очищены.")
 
-# Function to add keyword
-async def add_keyword(update: Update, context):
+# Function to translate text using DeepL API
+def translate_text(text, target_lang='ru'):
+    url = "https://api-free.deepl.com/v2/translate"
+    headers = {"Authorization": f"DeepL-Auth-Key {deepl_api_key}"}
+    data = {
+        "text": text,
+        "target_lang": target_lang,
+    }
     try:
-        index, keyword = update.message.text.split(' ', 1)
-        index = int(index) - 1
-        if 0 <= index < len(urls):
-            url = list(urls.keys())[index]
-            urls[url]['keywords'].append(keyword.strip())
-            save_urls()  # Save URLs after adding a keyword
-            await update.message.reply_text(f"Добавлено ключевое слово '{keyword}' для URL: {url}", reply_markup=generate_keyboard())
-            logger.info(f"Добавлено ключевое слово '{keyword}' для URL: {url}")
-        else:
-            await update.message.reply_text(f"Недействительный индекс: {index + 1}", reply_markup=generate_keyboard())
-    except ValueError:
-        await update.message.reply_text("Пожалуйста, укажите правильный индекс и ключевое слово.", reply_markup=generate_keyboard())
+        response = requests.post(url, headers=headers, data=data)
+        response.raise_for_status()
+        translated_text = response.json()['translations'][0]['text']
+        logger.info(f"Текст переведен: {translated_text[:100]}...")
+        return translated_text
+    except requests.RequestException as e:
+        logger.error(f"Ошибка перевода текста через DeepL: {e}")
+        return "Ошибка перевода текста."
 
-# Function to remove keyword
-async def remove_keyword(update: Update, context):
-    try:
-        index, keyword = update.message.text.split(' ', 1)
-        index = int(index) - 1
-        if 0 <= index < len(urls):
-            url = list(urls.keys())[index]
-            keyword = keyword.strip()
-            if keyword in urls[url]['keywords']:
-                urls[url]['keywords'].remove(keyword)
-                save_urls()  # Save URLs after removing a keyword
-                await update.message.reply_text(f"Удалено ключевое слово '{keyword}' для URL: {url}", reply_markup=generate_keyboard())
-                logger.info(f"Удалено ключевое слово '{keyword}' для URL: {url}")
-            else:
-                await update.message.reply_text(f"Ключевое слово '{keyword}' не найдено для URL: {url}", reply_markup=generate_keyboard())
-        else:
-            await update.message.reply_text(f"Недействительный индекс: {index + 1}", reply_markup=generate_keyboard())
-    except ValueError:
-        await update.message.reply_text("Пожалуйста, укажите правильный индекс и ключевое слово.", reply_markup=generate_keyboard())
+# Function to handle translation request
+async def handle_translation(update: Update, context):
+    url = context.user_data.get('article_url')
+    if url:
+        logger.info(f"Translating article at URL: {url}")
+        try:
+            response = requests.get(url)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+            article_text = ' '.join(p.get_text() for p in soup.find_all('p'))
+            translated_text = translate_text(article_text)
+            await update.callback_query.message.reply_text(translated_text)
+        except requests.RequestException as e:
+            logger.error(f"Ошибка при получении статьи для перевода: {e}")
+            await update.callback_query.message.reply_text("Ошибка при получении статьи для перевода.")
+    else:
+        await update.callback_query.message.reply_text("Не удалось найти статью для перевода.")
 
-# Function to list keywords
-async def list_keywords(update: Update, context):
-    try:
-        index = int(update.message.text) - 1
-        if 0 <= index < len(urls):
-            url = list(urls.keys())[index]
-            if urls[url]['keywords']:
-                keyword_list = "\n".join(urls[url]['keywords'])
-                await update.message.reply_text(f"Ключевые слова для URL {url}:\n" + keyword_list, reply_markup=generate_keyboard())
-            else:
-                await update.message.reply_text(f"Нет ключевых слов для URL: {url}", reply_markup=generate_keyboard())
-        else:
-            await update.message.reply_text(f"Недействительный индекс: {index + 1}", reply_markup=generate_keyboard())
-    except ValueError:
-        await update.message.reply_text("Пожалуйста, укажите правильный индекс.", reply_markup=generate_keyboard())
+# Function to handle button presses for translation
+async def translation_button(update: Update, context):
+    query = update.callback_query
+    context.user_data['article_url'] = query.data.split('_')[1]
+    await handle_translation(update, context)
 
 # Function to handle user messages based on the context of the action (add/remove/keywords)
 async def handle_message(update: Update, context):
-    action = context.user_data.get('action')
+    action = update.message.text
     chat_ids[update.message.chat_id] = update.message.chat_id
-    if action == 'add':
-        await add_url(update, context)
-    elif action == 'remove':
-        await remove_url(update, context)
-    elif action == 'keywords':
-        context.user_data['url_index'] = int(update.message.text) - 1
-        await update.message.reply_text("Выберите действие с ключевыми словами: /add_keyword, /remove_keyword, /list_keywords", reply_markup=generate_keyboard())
-    elif action == 'add_keyword':
-        await add_keyword(update, context)
-    elif action == 'remove_keyword':
-        await remove_keyword(update, context)
-    elif action == 'list_keywords':
-        await list_keywords(update, context)
+
+    if action == "Добавить URL":
+        context.user_data['action'] = 'add'
+        await update.message.reply_text("Отправьте URL для добавления:", reply_markup=generate_static_keyboard())
+    elif action == "Удалить URL":
+        url_list = "\n".join([f"{i+1}. {url}" for i, url in enumerate(urls.keys())])
+        context.user_data['action'] = 'remove'
+        await update.message.reply_text(f"Отправьте номер URL для удаления:\n{url_list}", reply_markup=generate_static_keyboard())
+    elif action == "Список URL":
+        await list_urls(update, context)
+    elif action == "Очистить URL":
+        await clear_urls(update, context)
     else:
-        await update.message.reply_text("Пожалуйста, используйте кнопки для выбора действия.", reply_markup=generate_keyboard())
+        await update.message.reply_text("Пожалуйста, используйте кнопки для выбора действия.", reply_markup=generate_static_keyboard())
+
 # Initialize previous articles for all URLs
 previous_articles = {}
 
@@ -293,10 +263,14 @@ def start_monitoring():
                             with open('change_log.txt', 'a') as log_file:
                                 log_file.write(message + '\n')
                             
+                            # Create a keyboard with a "Translate" button
+                            translate_button = InlineKeyboardButton("Перевести", callback_data=f'translate_{article[1]}')
+                            reply_markup = InlineKeyboardMarkup([[translate_button]])
+
                             # Send Telegram notification to all users
                             for chat_id in chat_ids.values():
                                 logger.info(f"Sending notification to {chat_id}")
-                                send_telegram_message(chat_id, message)
+                                send_telegram_message(chat_id, message, reply_markup=reply_markup)
                     
                     previous_articles[url] = new_articles
                     logger.info(f"Updated articles for {url}")
@@ -312,11 +286,15 @@ def main():
     load_urls()
     application = Application.builder().token(telegram_bot_token).build()
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button))
+    application.add_handler(CallbackQueryHandler(translation_button, pattern=r'^translate_'))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
     # Start the monitoring in a separate thread
     monitoring_thread = threading.Thread(target=start_monitoring)
     monitoring_thread.start()
+
+    # Run the application
     application.run_polling()
+
 if __name__ == '__main__':
     main()
