@@ -195,7 +195,10 @@ async def handle_translation(update: Update, context):
             soup = BeautifulSoup(response.text, 'html.parser')
             article_text = ' '.join(p.get_text() for p in soup.find_all('p'))
             translated_text = translate_text(article_text)
-            await update.callback_query.message.reply_text(translated_text)
+            message = (f"<b>Переведенная статья:</b>\n{translated_text}\n\n"
+                       f"<b>Оригинал:</b> <a href='{url}'>Читать на сайте</a>\n\n"
+                       f"<b>Опубликовать на:</b> <a href='https://telegra.ph/'>Telegra.ph</a>")
+            await update.callback_query.message.reply_text(message)
         except requests.RequestException as e:
             logger.error(f"Ошибка при получении статьи для перевода: {e}")
             await update.callback_query.message.reply_text("Ошибка при получении статьи для перевода.")
