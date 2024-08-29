@@ -80,13 +80,14 @@ def get_links_and_spans_from_content(url):
         soup = BeautifulSoup(response.text, 'html.parser')
         articles = []
 
-        # Найдем все теги <a> внутри конкретных блоков (например, статьи)
-        for article_block in soup.find_all('div', class_='tdb-block-inner td-fix-index'):
-            for a in article_block.find_all('a', href=True):
-                link = a['href']
-                if re.match(r'^https?://', link):
-                    articles.append((a.get_text(strip=True), link))
-        
+        # Ищем все статьи в контейнере с id "tdi_116"
+        for article_block in soup.select('#tdi_116 .td-module-container'):
+            title_tag = article_block.find('h3', class_='entry-title')
+            if title_tag:
+                link = title_tag.find('a', href=True)['href']
+                title = title_tag.get_text(strip=True)
+                articles.append((title, link))
+
         logger.debug(f"Extracted {len(articles)} links from {url}")
         return articles
     except requests.RequestException as e:
