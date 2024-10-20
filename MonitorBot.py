@@ -1,35 +1,31 @@
 import time
-import json
-from datetime import datetime
 import requests
-from telegram import Update
-from telegram.ext import Application, CommandHandler
 from bs4 import BeautifulSoup
 import logging
+from telegram import Update
+from telegram.ext import Application, CommandHandler
 import threading
 
 # Telegram bot configuration
 telegram_bot_token = '7241698952:AAF_-xoUSOVmJHSaJE_9d1--OUBqzZKTo6o'
+chat_ids = {}
 
 # Configure logging
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',  # Убедитесь, что формат включает корректные поля
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-# URL to monitor
-monitoring_url = "https://carnewschina.com/category/electric-vehicles/"
-
-# Dictionary to store chat IDs
-chat_ids = {}
 
 # Заголовки с User-Agent
 headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/86.0.4240.198 Safari/537.36'
 }
 
-# Function to send Telegram message
+# URL для мониторинга
+monitoring_url = "https://carnewschina.com/category/electric-vehicles/"
+
+# Функция для отправки сообщения в Telegram
 def send_telegram_message(chat_id, message):
     url = f"https://api.telegram.org/bot{telegram_bot_token}/sendMessage"
     payload = {
@@ -40,162 +36,155 @@ def send_telegram_message(chat_id, message):
     try:
         response = requests.post(url, data=payload)
         response.raise_for_status()
-        logger.info(f"Сообщение отправлено: {message[:100]}...")  # Логируем первые 100 символов сообщения для отладки
+        logger.info(f"Сообщение отправлено: {message[:100]}...")
     except requests.RequestException as e:
         logger.error(f"Не удалось отправить сообщение: {e}")
 
-# Функция для разбиения длинного текста на части по 4000 символов
-def split_long_message(text, max_length=4000):
-    """Разбивает текст на части длиной не более max_length символов."""
-    return [text[i:i+max_length] for i in range(0, len(text), max_length)]
-
-# Function to get article links from the main page
+# Функция для получения ссылок на статьи с сайта
 def get_links_from_content(url):
     try:
-        response = requests.get(url, headers=headers)  # Добавляем заголовки при запросе
+        response = requests.get(url, headers=headers)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         articles = []
 
-        # Ищем все статьи в блоке с классом "td_block_inner tdb-block-inner td-fix-index"
         for article_block in soup.select('.td_block_inner.tdb-block-inner.td-fix-index .entry-title.td-module-title'):
             link_tag = article_block.find('a', href=True)
             if link_tag:
-                link = link_tag['href']
                 title = link_tag.get_text(strip=True)
+                link = link_tag['href']
+                # Проверяем, что ссылка содержит схему (http/https)
+                if not link.startswith('http'):
+                    link = f'https://{link}'  # Добавляем схему, если ее нет
                 articles.append((title, link))
 
-        logger.debug(f"Extracted {len(articles)} links from {url}")
         return articles
     except requests.RequestException as e:
         logger.error(f"Не удалось получить содержимое с {url}: {e}")
         return None
 
-# Function to extract the full text and images of the article
-def extract_article_content_and_images(article_url):
+# Функция для получения текста статьи и ссылок на изображения
+def get_article_content(article_url):
     try:
-        response = requests.get(article_url, headers=headers)  # Добавляем заголовки при запросе
+        response = requests.get(article_url, headers=headers)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # Ищем текст статьи в блоке с классом "tdb-block-inner td-fix-index"
-        article_text_parts = []
-        for p in soup.select('.tdb-block-inner.td-fix-index p'):
-            text = p.get_text(strip=True)
-            if text:
-                article_text_parts.append(text)
+        # Получаем основной текст статьи
+        content = []
+        for paragraph in soup.select('.tdb-block-inner.td-fix-index p'):
+            content.append(paragraph.get_text())
 
-        article_text = "\n\n".join(article_text_parts)  # Разделяем абзацы
+        # Получаем ссылки на изображения
+        image_urls = []
+        for img_tag in soup.select('.tdb-block-inner.td-fix-index .wp-block-image.size-large img'):
+            img_url = img_tag['src']
+            image_urls.append(img_url)
 
-        # Ищем изображения в блоке с классом "wp-block-image size-large"
-        image_links = []
-        for img in soup.select('.tdb-block-inner.td-fix-index .wp-block-image.size-large img'):
-            img_url = img.get('src')
-            if img_url:
-                image_links.append(img_url)
-
-        logger.debug(f"Extracted article content and images from {article_url}")
-        return article_text, image_links
+        return '\n'.join(content), image_urls
     except requests.RequestException as e:
-        logger.error(f"Ошибка при извлечении текста статьи и изображений с {article_url}: {e}")
-        return None, None
+        logger.error(f"Не удалось получить содержимое статьи с {article_url}: {e}")
+        return None, []
 
-# Initialize previous articles for tracking
-previous_articles = []
+# Функция для отправки новой статьи в чат
+def send_article_message(chat_id, title, link, content, image_urls):
+    message = f"<b>{title}</b>\n{link}\n\n{content}"
 
-# Function to send the latest article when the bot starts
-def send_latest_article(chat_id):
-    try:
-        new_articles = get_links_from_content(monitoring_url)
-        if new_articles:
-            latest_article = new_articles[0]  # Получаем последнюю статью
-            title, link = latest_article
-            article_text, image_links = extract_article_content_and_images(link)
-            if article_text:
-                # Отправляем текст статьи, разбивая его на части, если он превышает 4000 символов
-                message = (f"<b>Последняя статья:</b> <a href='{link}'>{title}</a>\n\n"
-                           f"<b>Текст статьи:</b>\n")
-                send_telegram_message(chat_id, message)
+    # Разбиваем сообщение на части, если оно превышает 4000 символов
+    while len(message) > 4000:
+        part = message[:4000]
+        send_telegram_message(chat_id, part)
+        message = message[4000:]
 
-                # Разбиваем текст на части и отправляем их
-                article_parts = split_long_message(article_text)
-                for part in article_parts:
-                    send_telegram_message(chat_id, part)
+    # Отправляем последнюю часть сообщения
+    send_telegram_message(chat_id, message)
 
-                # Отправляем изображения отдельно (без форматирования)
-                if image_links:
-                    images_message = "\n".join(image_links)  # Отправляем ссылки без разметки
-                    send_telegram_message(chat_id, f"<b>Изображения:</b>\n{images_message}")
-            else:
-                logger.warning("Не удалось извлечь текст последней статьи.")
-        else:
-            logger.warning("Нет доступных статей для отправки.")
-    except Exception as e:
-        logger.error(f"Ошибка при отправке последней статьи: {e}")
+    # Отправляем ссылки на изображения отдельным сообщением
+    if image_urls:
+        images_message = "Изображения:\n" + '\n'.join(image_urls)
+        send_telegram_message(chat_id, images_message)
 
+# Функция для мониторинга новых статей
 def start_monitoring():
     logger.info("Мониторинг начался")
     time.sleep(10)
+    previous_articles = []
+
     while True:
         try:
             logger.info(f"Checking URL: {monitoring_url}")
             new_articles = get_links_from_content(monitoring_url)
+
             if new_articles is None:
                 logger.warning(f"Articles for URL {monitoring_url} are None, skipping")
                 continue
-            if not previous_articles:
-                previous_articles.extend(new_articles)
-                logger.info(f"Initial articles for {monitoring_url}: {new_articles}")
-                continue
-            new_article_titles = {article[0] for article in new_articles}
-            old_article_titles = {article[0] for article in previous_articles}
-            new_titles = new_article_titles - old_article_titles
-            if new_titles:
-                for title in new_titles:
-                    article = next(article for article in new_articles if article[0] == title)
-                    article_text, image_links = extract_article_content_and_images(article[1])  # Извлекаем текст статьи и изображения
-                    if article_text:
-                        change_time = datetime.now()
 
-                        # Отправляем текст статьи
-                        message = (f"<b>Новая статья:</b> <a href='{article[1]}'>{article[0]}</a>\n\n"
-                                   f"<b>Текст статьи:</b>\n")
-                        send_telegram_message(chat_id, message)
+            # Формируем строку для логирования списков в три столбца с заголовками
+            def format_list_comparison(old, new, current):
+                max_len = max(len(old), len(new), len(current))
+                formatted = "Старый список          | Новый список           | Актуальный список\n"
+                formatted += "-" * 80 + "\n"
+                for i in range(max_len):
+                    old_item = (old[i][0][:30] if i < len(old) else '').ljust(30)
+                    new_item = (new[i][0][:30] if i < len(new) else '').ljust(30)
+                    current_item = (current[i][0][:30] if i < len(current) else '').ljust(30)
+                    formatted += f"{i+1:2}. {old_item} | {new_item} | {current_item}\n"
+                return formatted
 
-                        # Разбиваем текст на части и отправляем их
-                        article_parts = split_long_message(article_text)
-                        for part in article_parts:
-                            send_telegram_message(chat_id, part)
+            # Логируем списки в три столбца с обрезкой заголовков до 30 символов
+            logger.info(format_list_comparison(previous_articles, new_articles, new_articles))
 
-                        # Отправляем ссылки на изображения (без форматирования)
-                        if image_links:
-                            images_message = "\n".join(image_links)  # Отправляем ссылки без разметки
-                            send_telegram_message(chat_id, f"<b>Изображения:</b>\n{images_message}")
+            # Проверка на наличие новых статей
+            if previous_articles != new_articles:
+                latest_article_title = new_articles[0][0]  # Заголовок последней статьи
+                latest_article_link = new_articles[0][1]  # Ссылка на последнюю статью
+                
+                article_content, image_urls = get_article_content(latest_article_link)
+                if article_content:
+                    send_article_message(chat_ids[next(iter(chat_ids))], latest_article_title, latest_article_link, article_content, image_urls)
+                    logger.info(f"Новое сообщение отправлено о статье: {latest_article_title}")
 
-                previous_articles.extend(new_articles)
-                logger.info(f"Updated articles for {monitoring_url}")
+                # Обновляем список статей для следующего цикла
+                previous_articles = new_articles
             else:
-                logger.info(f"No new articles detected for {monitoring_url}")
-            time.sleep(60)  # Задержка в 60 секунд между проверками
+                logger.info("Новых статей не найдено.")
+
+            time.sleep(60)  # Проверяем раз в минуту
         except Exception as e:
             logger.error(f"Ошибка во время мониторинга: {e}")
-            time.sleep(60)  # Задержка в случае ошибки, чтобы не перегружать сайт
+            time.sleep(60)
 
-# Function to handle the start command
+# Функция для команды /start
 async def start(update: Update, context):
     chat_ids[update.message.chat_id] = update.message.chat_id
     await update.message.reply_text("Мониторинг запущен. Вы будете уведомлены о новых статьях.")
     send_latest_article(update.message.chat_id)  # Отправляем последнюю статью при запуске бота
 
+# Функция для отправки последней статьи при запуске
+def send_latest_article(chat_id):
+    try:
+        new_articles = get_links_from_content(monitoring_url)
+        if new_articles:
+            latest_article_title = new_articles[0][0]  # Заголовок последней статьи
+            latest_article_link = new_articles[0][1]   # Ссылка на последнюю статью
+
+            article_content, image_urls = get_article_content(latest_article_link)
+            if article_content:
+                send_article_message(chat_id, latest_article_title, latest_article_link, article_content, image_urls)
+        else:
+            logger.warning("Нет доступных статей для отправки.")
+    except Exception as e:
+        logger.error(f"Ошибка при отправке последней статьи: {e}")
+
 def main():
     application = Application.builder().token(telegram_bot_token).build()
     application.add_handler(CommandHandler("start", start))
 
-    # Start the monitoring in a separate thread
+    # Стартуем мониторинг в отдельном потоке
     monitoring_thread = threading.Thread(target=start_monitoring)
     monitoring_thread.start()
 
-    # Run the application
+    # Запуск приложения
     application.run_polling()
 
 if __name__ == '__main__':
