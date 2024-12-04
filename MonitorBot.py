@@ -5,12 +5,11 @@ import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler
 import threading
-import openai
 
 # Telegram bot configuration
 telegram_bot_token = '7241698952:AAF_-xoUSOVmJHSaJE_9d1--OUBqzZKTo6o'
 chat_ids = {}
-openai.api_key = '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'
+
 # Configure logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -43,22 +42,6 @@ def send_telegram_message(chat_id, message):
         logger.info(f"Message sent: {message[:100]}...")
     except requests.RequestException as e:
         logger.error(f"Failed to send message: {e}")
-
-# Translate and Summarize Article Content
-def translate_and_summarize(content, target_language="Russian"):
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant for translating and summarizing text."},
-                {"role": "user", "content": f"Translate this article to {target_language} and provide a summary: {content}"}
-            ]
-        )
-        result = response['choices'][0]['message']['content']
-        return result
-    except Exception as e:
-        logger.error(f"Failed to translate and summarize: {e}")
-        return None
 
 # Get article links from a category page
 def get_links_from_content(url):
@@ -105,11 +88,9 @@ def get_article_content(article_url):
         logger.error(f"Failed to retrieve article content from {article_url}: {e}")
         return None, []
 
+# Send article message in Telegram
 def send_article_message(chat_id, title, link, content, image_urls):
-    translated_summary = translate_and_summarize(content)
-    if translated_summary:
-        content = translated_summary
-
+    # Send the main article content
     message = f"<b>{title}</b>\n{link}\n\n{content}"
 
     while len(message) > 4000:
@@ -122,8 +103,6 @@ def send_article_message(chat_id, title, link, content, image_urls):
     if image_urls:
         images_message = "Images:\n" + '\n'.join([f"{i + 1}. {url}" for i, url in enumerate(image_urls)])
         send_telegram_message(chat_id, images_message)
-    fixed_link_message = "Make summary:\nhttps://chatgpt.com/c/ad04340a-54ed-4154-8c90-320292b57a03"
-    send_telegram_message(chat_id, fixed_link_message)
 
 # Monitor new articles for each URL
 def monitor_articles(url_key, url):
